@@ -1,0 +1,1 @@
+target_include_directories(${AHOI_LIB} PRIVATE "${CMAKE_CURRENT_LIST_DIR}")

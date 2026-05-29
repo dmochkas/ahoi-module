@@ -1,0 +1,1 @@
+target_sources(${AHOI_LIB} PRIVATE "${CMAKE_CURRENT_LIST_DIR}/core.c")
