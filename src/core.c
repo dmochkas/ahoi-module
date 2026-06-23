@@ -79,14 +79,14 @@ static packet_decode_status_t ahoi_decode_packet(const uint8_t* pkt_encoded, siz
                 if (pkt_encoded_end != NULL) {
                     *pkt_encoded_end = pkt_encoded + i + 1;
                 }
-                return 1;
+                return AHOI_DECODE_OK;
             }
             // Not expected
             if (byte != AHOI_DLE) {
                 if (pkt_encoded_end != NULL) {
                     *pkt_encoded_end = pkt_encoded + i + 1;
                 }
-                return -1;
+                return AHOI_DECODE_KO;
             }
             in_dle = false;
         } else if (byte == AHOI_DLE) {
@@ -97,7 +97,7 @@ static packet_decode_status_t ahoi_decode_packet(const uint8_t* pkt_encoded, siz
         pkt_bytes[pkt_index++] = byte;
     }
 
-    return 0;
+    return AHOI_DECODE_NOT_COMPLETE;
 }
 
 static consumer_status_t recv_handler(const uint8_t* data, size_t length, size_t* n_consumed, void* ctx) {
@@ -154,11 +154,10 @@ int io_mem_write(writer_t *w, const uint8_t* buf_in, size_t n)
     return (int) n;
 }
 
-static packet_encode_status_t ahoi_encode_packet(writer_t* writer, const ahoi_packet_t* pkt) {
-    const uint8_t* pkt_bytes = (const uint8_t*) pkt;
-    size_t packet_size = AHOI_HEADER_SIZE + pkt->pl_size;
+static packet_encode_status_t ahoi_encode_hdr_pld(writer_t* writer, const ahoi_header_t* hdr, const uint8_t* pld) {
+    const uint8_t* hdr_bytes = (const uint8_t*) hdr;
 
-    if (pkt->pl_size > AHOI_MAX_PAYLOAD_SIZE) {
+    if (hdr->pl_size > AHOI_MAX_PAYLOAD_SIZE) {
         // TODO: Log error
         return AHOI_ENCODE_KO;
     }
@@ -166,22 +165,32 @@ static packet_encode_status_t ahoi_encode_packet(writer_t* writer, const ahoi_pa
     // Write STX
     if (io_mem_write(writer, (uint8_t[]){AHOI_DLE, AHOI_STX}, 2) != 2) return AHOI_ENCODE_KO;
 
-    for (size_t i = 0; i < packet_size; i++) {
-        uint8_t byte = pkt_bytes[i];
+    for (int i = 0; i < AHOI_HEADER_SIZE; ++i) {
+        uint8_t byte = hdr_bytes[i];
         if (byte == AHOI_DLE) {
             if (io_mem_write(writer, (uint8_t[]){AHOI_DLE, AHOI_DLE}, 2) != 2) return AHOI_ENCODE_KO;
         } else {
-            if (io_mem_write(writer, (uint8_t[]){AHOI_DLE, AHOI_DLE}, 1) != 1) return AHOI_ENCODE_KO;
+            if (io_mem_write(writer, &byte, 1) != 1) return AHOI_ENCODE_KO;
+        }
+    }
+
+    for (size_t i = 0; i < hdr->pl_size; i++) {
+        uint8_t byte = pld[i];
+        if (byte == AHOI_DLE) {
+            if (io_mem_write(writer, (uint8_t[]){AHOI_DLE, AHOI_DLE}, 2) != 2) return AHOI_ENCODE_KO;
+        } else {
+            if (io_mem_write(writer, &byte, 1) != 1) return AHOI_ENCODE_KO;
         }
     }
 
     // Write ETX
     if (io_mem_write(writer, (uint8_t[]){AHOI_DLE, AHOI_ETX}, 2) != 2) return AHOI_ENCODE_KO;
 
-//    if (n != NULL) {
-//        *n = packet_size;
-//    }
     return AHOI_ENCODE_OK;
+}
+
+static packet_encode_status_t ahoi_encode_packet(writer_t* writer, const ahoi_packet_t* pkt) {
+    return ahoi_encode_hdr_pld(writer, (const ahoi_header_t*) pkt, pkt->payload);
 }
 
 // TODO: Log
@@ -302,21 +311,7 @@ rx_status_t ahoi_stateful_read(dev_con_t con, ahoi_packet_consumer_t pkt_consume
     return io_stateful_rx(con, 0, &ahoi->recv_writer, recv_handler, pkt_consumer);
 }
 
-int ahoi_write(dev_con_t con, const ahoi_packet_t* pkt) {
-    writer_t w = {0};
-    ahoi_encode_packet(&w, pkt);
-    uint8_t tx_buf[w.pos];
-    w.buf = tx_buf;
-    w.buf_len = w.pos;
-    w.pos = 0;
-    if (ahoi_encode_packet(&w, pkt) != AHOI_ENCODE_OK) {
-        goto error;
-    }
-
-    if (io_tx(con, tx_buf, w.pos) < 0) {
-        goto error;
-    }
-
+static int ahoi_handle_ack(dev_con_t con) {
     // TODO: Handle ack
     uint8_t sack_cmd[10];
     int n = io_rx_blocking(con, sack_cmd, 10, 100);
@@ -338,6 +333,31 @@ int ahoi_write(dev_con_t con, const ahoi_packet_t* pkt) {
 
     error:
     return -1;
+}
+
+int ahoi_write_hdr_pld(dev_con_t con, const ahoi_header_t* hdr, const uint8_t* pld) {
+    writer_t w = {0};
+    ahoi_encode_hdr_pld(&w, hdr, pld);
+    uint8_t tx_buf[w.pos];
+    w.buf = tx_buf;
+    w.buf_len = w.pos;
+    w.pos = 0;
+    if (ahoi_encode_hdr_pld(&w, hdr, pld) != AHOI_ENCODE_OK) {
+        goto error;
+    }
+
+    if (io_tx(con, tx_buf, w.pos) < 0) {
+        goto error;
+    }
+
+    return ahoi_handle_ack(con);
+
+    error:
+    return -1;
+}
+
+int ahoi_write(dev_con_t con, const ahoi_packet_t* pkt) {
+    return ahoi_write_hdr_pld(con, (const ahoi_header_t*) pkt, pkt->payload);
 }
 
 void ahoi_disconnect() {

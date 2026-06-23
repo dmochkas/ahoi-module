@@ -8,12 +8,12 @@
 
 #define AHOI_MAX_CONNECTIONS 1
 #define AHOI_READ_SIZE 127
-#define AHOI_READ_GUARD_TIME_MS 50
 
 #define AHOI_MAX_PAYLOAD_SIZE 127
 #define AHOI_HEADER_SIZE 6
 #define AHOI_MAX_PACKET_SIZE (AHOI_MAX_PAYLOAD_SIZE + AHOI_HEADER_SIZE)
 #define AHOI_FOOTER_SIZE 6
+#define AHOI_MAX_ENCODED_SIZE ((AHOI_MAX_PACKET_SIZE + AHOI_FOOTER_SIZE) * 2 + 4)
 
 #define AHOI_ACK_TYPE 0x7F
 #define AHOI_ID_CMD 0x84
@@ -83,5 +83,11 @@ typedef consumer_status_t (*ahoi_packet_consumer_t)(ahoi_packet_t*);
 int ahoi_connect(const ahoi_init_t* inits, uint8_t inits_len, dev_con_t* cons);
 
 command_set_status_t set_ahoi_id(dev_con_t con, uint8_t id);
+
+rx_status_t ahoi_stateful_read(dev_con_t con, ahoi_packet_consumer_t pkt_consumer);
+
+int ahoi_write(dev_con_t con, const ahoi_packet_t* pkt);
+
+int ahoi_write_hdr_pld(dev_con_t con, const ahoi_header_t* header, const uint8_t* payload);
 
 void ahoi_disconnect();

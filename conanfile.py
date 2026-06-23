@@ -4,7 +4,7 @@ from conan.tools.files import copy, collect_libs
 
 class AhoiModuleConan(ConanFile):
     name = "ahoi-module"
-    version = "1.0.0-1"
+    version = "1.0.0-3"
     license = "MIT"
     url = "https://github.com/dmochkas/ahoi-module"
     description = "Ahoi module"
