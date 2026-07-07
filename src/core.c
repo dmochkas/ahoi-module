@@ -306,9 +306,18 @@ rx_status_t ahoi_stateful_read(dev_con_t con, ahoi_packet_consumer_t pkt_consume
     ahoi_con_t* ahoi = ahoi_find_con(con);
     if (ahoi == NULL) {
         errno = EINVAL;
-        return -1;
+        return READ_INVALID_PARAM;
     }
     return io_stateful_rx(con, 0, &ahoi->recv_writer, recv_handler, pkt_consumer);
+}
+
+rx_status_t ahoi_stateless_read(dev_con_t con, uint16_t guard_time_ms, ahoi_packet_consumer_t pkt_consumer) {
+    ahoi_con_t* ahoi = ahoi_find_con(con);
+    if (ahoi == NULL) {
+        errno = EINVAL;
+        return READ_INVALID_PARAM;
+    }
+    return io_stateless_rx(con, guard_time_ms, ahoi->recv_writer.buf, ahoi->recv_writer.buf_len, recv_handler, pkt_consumer);
 }
 
 static int ahoi_handle_ack(dev_con_t con) {

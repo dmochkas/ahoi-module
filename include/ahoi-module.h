@@ -86,6 +86,8 @@ command_set_status_t set_ahoi_id(dev_con_t con, uint8_t id);
 
 rx_status_t ahoi_stateful_read(dev_con_t con, ahoi_packet_consumer_t pkt_consumer);
 
+rx_status_t ahoi_stateless_read(dev_con_t con, uint16_t guard_time_ms, ahoi_packet_consumer_t pkt_consumer);
+
 int ahoi_write(dev_con_t con, const ahoi_packet_t* pkt);
 
 int ahoi_write_hdr_pld(dev_con_t con, const ahoi_header_t* header, const uint8_t* payload);
