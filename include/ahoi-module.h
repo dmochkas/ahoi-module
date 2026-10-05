@@ -26,6 +26,8 @@
 #define AHOI_BROADCAST_ADDR 255
 #define AHOI_IS_BROADCAST(pkt) ((pkt)->dst == AHOI_BROADCAST_ADDR)
 
+#define AHOI_LOG_TAG "AHOI"
+
 typedef struct ahoi_init {
     dev_open_addr_t open_addr;
     int baud;

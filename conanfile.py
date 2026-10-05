@@ -4,10 +4,10 @@ from conan.tools.files import copy, collect_libs
 
 class AhoiModuleConan(ConanFile):
     name = "ahoi-module"
-    version = "1.0.0-4"
+    version = "1.0.0-5"
     license = "MIT"
     url = "https://github.com/dmochkas/ahoi-module"
-    description = "Ahoi module"
+    description = "Ahoi Module"
     settings = "os", "compiler", "build_type", "arch"
     exports_sources = "src/*", "include/*", "CMakeLists.txt"
 
@@ -15,6 +15,7 @@ class AhoiModuleConan(ConanFile):
 
     def requirements(self):
         self.requires("io-lib/1.0.0-1@dochkas/experimental")
+        self.requires("zlog/1.2.18@dochkas/stable")
 
     def layout(self):
         cmake_layout(self)

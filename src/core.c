@@ -5,9 +5,13 @@
 #include <string.h>
 #include <stdbool.h>
 
+#include <zlog.h>
+
 #define AHOI_DLE  0x10
 #define AHOI_STX  0x02
 #define AHOI_ETX  0x03
+
+static zlog_category_t* ahoi_log_cat = NULL;
 
 typedef enum {
     PACKET_SEND_OK,
@@ -65,7 +69,7 @@ static const uint8_t* ahoi_find_packet(const uint8_t* data, size_t length) {
 
 static packet_decode_status_t ahoi_decode_packet(const uint8_t* pkt_encoded, size_t max_len, ahoi_packet_t* pkt, const uint8_t** pkt_encoded_end) {
     if (pkt_encoded == NULL || max_len < 10 || pkt_encoded[0] != AHOI_DLE || pkt_encoded[1] != AHOI_STX) {
-        return -1;
+        return AHOI_DECODE_KO;
     }
 
     uint8_t* pkt_bytes = (uint8_t*) pkt;
@@ -109,20 +113,23 @@ static consumer_status_t recv_handler(const uint8_t* data, size_t length, size_t
     const uint8_t* data_end_ptr = data + length;
     const uint8_t* pkt_encoded_start = ahoi_find_packet(data, length);
     if (pkt_encoded_start == data_end_ptr) {
+        zlog_debug(ahoi_log_cat, "No AHOI packet found in %zu bytes", length);
         // Did not find, still ok
         *n_consumed = length;
         goto finish;
     }
     const uint8_t* pkt_encoded_end;
-    int decode_st = ahoi_decode_packet(pkt_encoded_start, data_end_ptr - pkt_encoded_start, &pkt, &pkt_encoded_end);
-    if (decode_st == 0) {
+    packet_decode_status_t decode_st = ahoi_decode_packet(pkt_encoded_start, data_end_ptr - pkt_encoded_start, &pkt, &pkt_encoded_end);
+    if (decode_st == AHOI_DECODE_NOT_COMPLETE) {
+        zlog_debug(ahoi_log_cat, "AHOI packet decode unfinished, consumed=%zu", length);
         // Packet decode not finished
         ret = CONSUMER_UNFINISHED;
         *n_consumed = length;
         goto finish;
     }
     *n_consumed = pkt_encoded_end - data;
-    if (decode_st < 0) {
+    if (decode_st == AHOI_DECODE_KO) {
+        zlog_error(ahoi_log_cat, "AHOI packet decode failed, consumed=%zu", *n_consumed);
         // Packet is corrupt, still ok
         goto finish;
     }
@@ -158,7 +165,7 @@ static packet_encode_status_t ahoi_encode_hdr_pld(writer_t* writer, const ahoi_h
     const uint8_t* hdr_bytes = (const uint8_t*) hdr;
 
     if (hdr->pl_size > AHOI_MAX_PAYLOAD_SIZE) {
-        // TODO: Log error
+        zlog_error(ahoi_log_cat, "Payload too large: %u > %u", hdr->pl_size, AHOI_MAX_PAYLOAD_SIZE);
         return AHOI_ENCODE_KO;
     }
 
@@ -198,7 +205,7 @@ static packet_encode_status_t ahoi_encode_packet(writer_t* writer, const ahoi_pa
 // Will error if ongoing tx or rx
 static packet_send_status_t send_ahoi_cmd(dev_con_t con, const ahoi_packet_t* pkt, uint8_t* resp_buf, size_t resp_buf_len, size_t* resp_len) {
     if (!AHOI_IS_COMMAND_PACKET(pkt)) {
-//        fprintf(stderr, "Expecting ahoi command packet\n");
+        zlog_error(ahoi_log_cat, "Expected command packet, type=%u", pkt->type);
         return PACKET_SEND_KO;
     }
     uint8_t cmd_id = pkt->type;
@@ -213,16 +220,17 @@ static packet_send_status_t send_ahoi_cmd(dev_con_t con, const ahoi_packet_t* pk
     writer.buf_len = writer.pos;
     writer.pos = 0;
     if (ahoi_encode_packet(&writer, pkt) != AHOI_ENCODE_OK) {
+        zlog_error(ahoi_log_cat, "Failed to encode AHOI command packet");
         return PACKET_SEND_KO;
     }
 
-    int n = io_tx(con, cmd_buf, writer.pos);
+    int n = io_tx(con, cmd_buf, (int) writer.pos);
     if (n < 0) {
-//        fprintf(stderr, "Error writing to serial port\n");
+        zlog_error(ahoi_log_cat, "Failed to write command to device con=%d", con);
         return PACKET_SEND_KO;
     }
     if (n != writer.pos) {
-//        fprintf(stderr, "Warning: Partial write (%zd of %lu bytes)\n", bytes_written, len);
+        zlog_error(ahoi_log_cat, "Partial write: %d of %zu bytes", n, writer.pos);
         return PACKET_SEND_KO;
     }
 
@@ -230,23 +238,24 @@ static packet_send_status_t send_ahoi_cmd(dev_con_t con, const ahoi_packet_t* pk
     uint8_t cmd_resp_buf_len = sizeof(cmd_resp_buf);
     // TODO: define 100 ms
     if ((n = io_rx_blocking(con, cmd_resp_buf, cmd_resp_buf_len, 100)) < 1) {
-        // TODO: Log
+        zlog_error(ahoi_log_cat, "Command response read failed or timed out, n=%d", n);
         return PACKET_SEND_KO;
     }
 
     ahoi_packet_t resp = {0};
-    if (ahoi_decode_packet(cmd_resp_buf, n, &resp, NULL) < 0) {
+    if (ahoi_decode_packet(cmd_resp_buf, n, &resp, NULL) != AHOI_DECODE_OK) {
+        zlog_error(ahoi_log_cat, "Failed to decode command response");
         return PACKET_SEND_KO;
     }
 
     if (pkt->type != cmd_id) {
-//        fprintf(stderr, "Ahoi cmd is malformed\n");
+        zlog_error(ahoi_log_cat, "Malformed command response: type mismatch cmd=%u resp=%u", cmd_id, resp.type);
         return PACKET_SEND_KO;
     }
 
     if (resp_buf != NULL) {
         if (resp_buf_len < resp.pl_size) {
-//            fprintf(stderr, "Response buffer is too small\n");
+            zlog_error(ahoi_log_cat, "Response buffer too small: %zu < %u", resp_buf_len, resp.pl_size);
             return PACKET_SEND_KO;
         }
         memcpy(resp_buf, resp.payload, resp.pl_size);
@@ -270,11 +279,19 @@ command_set_status_t set_ahoi_id(dev_con_t con, const uint8_t id) {
 }
 
 int ahoi_connect(const ahoi_init_t* inits, uint8_t inits_len, dev_con_t* cons) {
+    if (ahoi_log_cat == NULL) {
+        ahoi_log_cat = zlog_get_category(AHOI_LOG_TAG);
+        if (ahoi_log_cat == NULL) {
+            zlog_warn(ahoi_log_cat, "Failed to get zlog category '%s'", AHOI_LOG_TAG);
+        }
+    }
+
     for (int i = 0; i < inits_len; ++i) {
         const ahoi_init_t* curr_init = &inits[i];
         ahoi_con_t* curr_con = &ahoi_con_table.ahoi_cons[i];
         curr_con->con = io_open_serial(curr_init->open_addr, curr_init->baud);
         if (curr_con->con < 0) {
+            zlog_error(ahoi_log_cat, "Failed to open serial '%s' at %u baud", curr_init->open_addr, curr_init->baud);
             goto error;
         }
 
@@ -282,6 +299,7 @@ int ahoi_connect(const ahoi_init_t* inits, uint8_t inits_len, dev_con_t* cons) {
         io_rx_drain(curr_con->con);
 
         if (set_ahoi_id(curr_con->con, curr_init->id) != AHOI_COMMAND_SET_OK) {
+            zlog_error(ahoi_log_cat, "Failed to set AHOI id=%u on con=%d", curr_init->id, curr_con->con);
             goto error;
         }
 
@@ -320,24 +338,28 @@ rx_status_t ahoi_stateless_read(dev_con_t con, uint16_t guard_time_ms, ahoi_pack
     return io_stateless_rx(con, guard_time_ms, ahoi->recv_writer.buf, ahoi->recv_writer.buf_len, recv_handler, pkt_consumer);
 }
 
-static int ahoi_handle_ack(dev_con_t con) {
+static int ahoi_handle_sack(dev_con_t con) {
     // TODO: Handle ack
     uint8_t sack_cmd[10];
     int n = io_rx_blocking(con, sack_cmd, 10, 100);
     // Encoded ACK size
     if (n != 10) {
+        zlog_error(ahoi_log_cat, "Invalid serial ACK size: %d", n);
         goto error;
     }
 
     ahoi_header_t header = {0};
     if (ahoi_decode_packet(sack_cmd, sizeof(sack_cmd), (ahoi_packet_t*) &header, NULL) != AHOI_DECODE_OK) {
+        zlog_error(ahoi_log_cat, "Failed to decode serial ACK packet");
         goto error;
     }
 
     if (!AHOI_IS_SERIAL_ACK(&header)) {
+        zlog_error(ahoi_log_cat, "Received non-ACK packet while awaiting serial ACK");
         goto error;
     }
 
+    zlog_debug(ahoi_log_cat, "Serial ACK handle OK");
     return 1;
 
     error:
@@ -352,14 +374,16 @@ int ahoi_write_hdr_pld(dev_con_t con, const ahoi_header_t* hdr, const uint8_t* p
     w.buf_len = w.pos;
     w.pos = 0;
     if (ahoi_encode_hdr_pld(&w, hdr, pld) != AHOI_ENCODE_OK) {
+        zlog_error(ahoi_log_cat, "Failed to encode outgoing packet");
         goto error;
     }
 
     if (io_tx(con, tx_buf, w.pos) < 0) {
+        zlog_error(ahoi_log_cat, "Failed to write packet to device con=%d", con);
         goto error;
     }
 
-    return ahoi_handle_ack(con);
+    return ahoi_handle_sack(con);
 
     error:
     return -1;

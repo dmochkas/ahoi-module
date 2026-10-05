@@ -6,13 +6,14 @@ include(GNUInstallDirs)
 set(AHOI_LIB ${PROJECT_NAME})
 
 find_package(io-lib REQUIRED)
+find_package(zlog REQUIRED)
 
 add_library(${AHOI_LIB})
 
 add_subdirectory(include)
 add_subdirectory(src)
 
-target_link_libraries(${AHOI_LIB} PRIVATE io-lib::io-lib)
+target_link_libraries(${AHOI_LIB} PRIVATE io-lib::io-lib zlog::zlog)
 
 install(TARGETS ${AHOI_LIB}
         ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
