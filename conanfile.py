@@ -4,18 +4,28 @@ from conan.tools.files import copy, collect_libs
 
 class AhoiModuleConan(ConanFile):
     name = "ahoi-module"
-    version = "1.0.0-5"
+    version = "1.0.0-7"
     license = "MIT"
     url = "https://github.com/dmochkas/ahoi-module"
     description = "Ahoi Module"
     settings = "os", "compiler", "build_type", "arch"
-    exports_sources = "src/*", "include/*", "CMakeLists.txt"
+    exports_sources = "src/*", "include/*", "CMakeLists.txt", "config.cmake"
 
-    default_options = {}
+    options = {
+        "with_logs": [True, False],
+        "with_io": [True, False]
+    }
+    default_options = {
+        "with_logs": True,
+        "with_io": False
+    }
 
     def requirements(self):
-        self.requires("io-lib/1.0.0-1@dochkas/experimental")
-        self.requires("zlog/1.2.18@dochkas/stable")
+        if self.options.with_io == True:
+            self.requires("io-lib/1.0.0-2@dochkas/experimental")
+
+        if self.options.with_logs == True:
+            self.requires("zlog/1.2.18@dochkas/stable")
 
     def layout(self):
         cmake_layout(self)
@@ -24,6 +34,10 @@ class AhoiModuleConan(ConanFile):
         deps = CMakeDeps(self)
         deps.generate()
         tc = CMakeToolchain(self)
+        tc.cache_variables["WITH_IO"] = bool(self.options.with_io)
+
+        tc.variables["CMAKE_TRY_COMPILE_TARGET_TYPE"] = "STATIC_LIBRARY"
+        tc.variables["WITH_LOGS"] = bool(self.options.with_logs)
         tc.generate()
 
     def build(self):

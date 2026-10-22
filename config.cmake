@@ -1,0 +1,1 @@
+set(WITH_IO ON CACHE BOOL "Include IO functionality in the build.")
